@@ -1,33 +1,49 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeConfig, DEFAULT_CONFIG } from '../src/config.js';
+import { credentialsKey, normalizeConfig, parseAddress } from '../src/config.js';
 
-test('normalizeConfig returns the defaults when called with no argument', () => {
-  assert.deepEqual(normalizeConfig(), DEFAULT_CONFIG);
+test('addresses: IPv4, host names, ports, pasted URLs', () => {
+  assert.deepEqual(parseAddress('192.168.1.70'), { host: '192.168.1.70', port: 80 });
+  assert.deepEqual(parseAddress('http://OpenEVSE-7B2C.local:8080/status'), {
+    host: 'openevse-7b2c.local',
+    port: 8080,
+  });
+  for (const bad of ['', '999.1.1.1', 'a b', 'host:0', 'host:70000', '-bad.local']) {
+    assert.equal(parseAddress(bad), undefined, bad);
+  }
 });
 
-test('normalizeConfig keeps user values over the defaults', () => {
-  const config = normalizeConfig({ latitude: 45.5, longitude: -73.6, unit: 'fahrenheit' });
-  assert.equal(config.latitude, 45.5);
-  assert.equal(config.longitude, -73.6);
-  assert.equal(config.unit, 'fahrenheit');
+test('the commands are off unless exactly true', () => {
+  for (const value of [undefined, false, 'false', 1, 'yes', 'TRUE']) {
+    assert.equal(normalizeConfig({ allow_commands: value }).allowCommands, false, String(value));
+  }
+  assert.equal(normalizeConfig({ allow_commands: true }).allowCommands, true);
+  assert.equal(normalizeConfig({ allow_commands: 'true' }).allowCommands, true);
 });
 
-test('normalizeConfig coerces numeric strings coming from a form', () => {
-  const config = normalizeConfig({ latitude: '48.8', longitude: '2.3', poll_frequency: '600' });
-  assert.equal(config.latitude, 48.8);
-  assert.equal(config.longitude, 2.3);
-  assert.equal(config.poll_frequency, 600);
-  assert.equal(typeof config.poll_frequency, 'number');
+test('credentials: both or neither; never a colon in the user name', () => {
+  assert.equal(normalizeConfig({}).auth, undefined);
+  assert.equal(normalizeConfig({}).badAuth, undefined);
+  assert.deepEqual(normalizeConfig({ username: ' admin ', password: 'pw' }).auth, {
+    user: 'admin',
+    password: 'pw',
+  });
+  assert.equal(normalizeConfig({ username: 'admin' }).badAuth, 'incomplete');
+  assert.equal(normalizeConfig({ password: 'pw' }).badAuth, 'incomplete');
+  assert.equal(normalizeConfig({ username: 'a:b', password: 'pw' }).badAuth, 'invalid');
+  assert.equal(normalizeConfig({ username: 'admin', password: 'mot de passé' }).badAuth, 'invalid');
+  assert.notEqual(
+    credentialsKey(normalizeConfig({ username: 'a', password: 'b' })),
+    credentialsKey(normalizeConfig({ username: 'a', password: 'c' })),
+  );
 });
 
-test('normalizeConfig falls back to the default for a missing numeric field', () => {
-  const config = normalizeConfig({ unit: 'celsius' });
-  assert.equal(config.poll_frequency, DEFAULT_CONFIG.poll_frequency);
-});
-
-test('GLADYS_PREFER_LOCAL defaults to true and only an explicit false disables it', () => {
-  assert.equal(normalizeConfig().GLADYS_PREFER_LOCAL, true);
-  assert.equal(normalizeConfig({ GLADYS_PREFER_LOCAL: true }).GLADYS_PREFER_LOCAL, true);
-  assert.equal(normalizeConfig({ GLADYS_PREFER_LOCAL: false }).GLADYS_PREFER_LOCAL, false);
+test('the ceiling and the interval are bounded', () => {
+  assert.equal(normalizeConfig({}).maxCurrent, 16);
+  assert.equal(normalizeConfig({ max_current: 200 }).maxCurrent, 80);
+  assert.equal(normalizeConfig({ max_current: 2 }).maxCurrent, 6);
+  assert.equal(normalizeConfig({ max_current: '' }).maxCurrent, 16);
+  assert.equal(normalizeConfig({ poll_interval: 1 }).pollInterval, 10);
+  assert.equal(normalizeConfig({ poll_interval: 'x' }).pollInterval, 30);
+  assert.equal(normalizeConfig({ language: 'de' }).language, 'fr');
 });

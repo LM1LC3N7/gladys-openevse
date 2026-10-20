@@ -1,61 +1,150 @@
-# Demo Devices Template
+# OpenEVSE for Gladys
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Shows your **OpenEVSE** charger (ESP32 WiFi module, firmware 4.x or 5.x) in
+Gladys through its **local HTTP API**: no cloud, no account, straight on your
+network.
+
+> **Never tested with a real charger.** Not affiliated with OpenEVSE.
+> The integration talks to the charger as the python-openevse-http library
+> (used by Home Assistant) does. A firmware update may change the API.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+One device per charger, with:
 
-## Configuration
+| Feature                        | Content                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| Status                         | No vehicle, plugged in waiting, charging, paused, disabled, faults        |
+| Connector                      | Available, occupied, faulted or unavailable ("charging station" category) |
+| Charging state                 | Charging, vehicle connected, paused by the charger, idle                  |
+| Vehicle plugged in             | Yes / no                                                                  |
+| Power                          | In W (given by the charger, else voltage × current)                       |
+| Current, voltage               | In A, in V                                                                |
+| Current offered to the vehicle | In A (the pilot signal)                                                   |
+| Energy of the session          | In kWh, a plain sensor                                                    |
+| Energy index                   | In kWh, the total counter of the charger, guarded (see below)             |
+| Temperature of the charger     | In °C                                                                     |
+| Manual override                | None (the charger decides), charge forced on, charge paused               |
+| Fault reported                 | Yes / no (ground fault, stuck relay, over temperature…)                   |
+| Start charging                 | Button (commands allowed only)                                            |
+| Pause charging                 | Button (commands allowed only)                                            |
+| Set the charging current       | List from 6 A to the ceiling (commands allowed only)                      |
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+Read every 30 seconds by default (10 s to 10 min, configurable).
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+## Energy index (guarded)
 
-## Actions
+The **energy index** is the total counter of the charger (`total_energy`):
+Gladys turns it into the consumption and the cost of the charger in its
+Energy tab. Since Gladys counts every rise in full, the index goes through a
+**guard** (the one of the P1 Monitor integration):
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+- an index of 0 is **never** published;
+- a plausible rise (25 kW on average at most since the last value) goes
+  through;
+- a **jump** up or a **drop** (counter reset, another charger at the same
+  address) is **held back**: the last accepted value is sent again, the
+  status of the integration shows it, and the hold is kept in `/data` across
+  a restart. Neither time nor repetition confirms it;
+- only the **Accept the held index** button of the configuration takes it, in
+  **two clicks**: the first shows the value and the kWh at stake, the second
+  (within 2 minutes) takes exactly that value (plus what the charger may have
+  drawn since). A drop accepted bills nothing.
 
-## Scenes
+The charger is already counted by your main meter: in the Energy settings of
+Gladys, put it **under** your main meter so it is not counted twice. No daily
+consumption is published.
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+## Installation
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+1. Give the charger a **fixed IP address** in your router (or use its name
+   `openevse-xxxx.local`).
+2. Check in its web interface that the **WiFi firmware is 4.0 or later**
+   (4.1.2 for the charging current). Firmwares 2.x and 3.x give no serial
+   number: they are not supported.
+3. Install the integration from the Gladys store. In its configuration, enter
+   the **IP address of the charger**, and, only if its web interface asks for
+   them, the **user name** and the **password** (HTTP authentication).
+4. Save, then add the charger from the **Discovery** tab.
 
-## Dashboard
+The password is **kept by Gladys in its database, never shown again**, and
+sent only to the charger (HTTP Basic authentication). The charger only speaks
+plain HTTP: the user name and the password travel **in clear** on your local
+network, as with the web interface itself. Keep the charger on a trusted
+network. They are never written to the logs, to `/data`, nor to a state. The
+configuration of the charger also holds its own passwords (WiFi, MQTT…): the
+integration only reads its identity, versions and current bounds from it,
+nothing else is kept.
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+The **Test the connection** button reads the charger once (at most every
+10 seconds).
 
-## Troubleshooting
+## Commands (off by default)
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+"Start charging", "Pause charging" and "Set the charging current" refuse
+every command while **Allow the commands** is off. On, they go through the
+**manual override** of the charger (`/override`):
+
+- **Pause** sets a "paused" override: the charger stops charging. The pause
+  is **never held back**: it goes at once, in one request, without a read,
+  even during another command (which gives way if it has not left yet;
+  otherwise the pause is sent once more when it settles), even within the
+  minute after a start, even during a 429 or 5xx pause, even right after the
+  credentials were refused, whatever the firmware;
+- **Start** sets a "charge" override (the settings of the override in force
+  are kept); **refused without a vehicle plugged in**, or on a fault or an
+  unknown state; no effect (not sent) when the charger already charges
+  without a pause;
+- **Charging current**: from 6 A (or the hardware minimum of the charger) to
+  the **ceiling**: the lower of the "Ceiling of the charging current" of the
+  configuration (16 A by default, 80 A at most) and the hardware maximum read
+  from the charger. The state of the override in force is kept: **a pause
+  stays a pause**, changing the current never starts the charge again. WiFi
+  firmware 4.1.2 or later.
+- **One start or current change a minute at most**: no fine regulation from
+  Gladys.
+
+They are **buttons** and a **list**, never switches: a "turn everything off"
+(from Gladys, Google Home, Alexa or HomeKit) never reaches them. A scene may
+trigger them, only through an explicit action, and only when the commands
+are allowed. Note that the AI chat of Gladys (MCP) can create and run such a
+scene: while the commands are allowed, it can start or pause the charge.
+
+Before a start or a current change, the integration **reads the charger
+again** (state and override) and decides on that read only; the option is
+checked again right before sending. A command that cannot leave within 3.5
+seconds is refused unsent. When the charger does not confirm (silence, a 5xx,
+an answer not understood), Gladys shows "Command sent, without confirmation":
+check the state, read again 5 then 20 seconds later. When a command stayed
+without confirmation, it may still reach the charger later: a pause sent
+within the next 90 seconds is watched, and sent again (twice at most) if a
+read shows the charge allowed again while no other command left.
+
+The manual override keeps the behaviour of the charger: with "auto release"
+(a setting of the override), it ends when the vehicle is unplugged.
+
+## Errors and limits
+
+- **Charger unreachable**: only the connector ("unavailable") and the status
+  ("Charger unreachable") change; the other values keep their last one. New
+  try after 30 s, 1, 2, then 5 minutes, never faster than the interval.
+- **Credentials refused** (or asked for while none is given): the status says
+  so; new tries after 15 minutes, 1 hour, then every 6 hours, never sooner
+  (kept in `/data` across a restart); saving new credentials tries again at
+  once.
+- **429 (too many requests)** or **5xx**: a pause (1 minute to 6 hours for a 429) for the reads and the commands but the pause of the charge, never
+  shorter than the interval, kept in `/data` across a restart.
+- One charger per integration. Neither the solar mode (divert), the schedule,
+  the session limits, a restart nor the firmware can be changed from Gladys.
+  The websocket of the charger is not used (periodic reads).
+- An OpenEVSE charger linked to an **OCPP** server (for example sescandell's
+  OCPP integration) may be driven from both sides: the last command wins.
+  Pick one driver.
+- The logs never hold the text of the charger's answers, the user name nor
+  the password.
+
+## Credits
+
+Port of [python-openevse-http](https://github.com/firstof9/python-openevse-http)
+(firstof9, Apache-2.0, version 1.9.0), the library of Home Assistant's
+OpenEVSE integration. Apache-2.0 license.
