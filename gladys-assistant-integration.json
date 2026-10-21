@@ -6,8 +6,8 @@
     "en": "OpenEVSE chargers over their local HTTP API: state, current, energy, temperature; optional commands.",
     "fr": "Bornes OpenEVSE par l'API HTTP locale : état, courant, énergie, température ; commandes en option."
   },
-  "version": "0.1.0",
-  "docker_image": "ghcr.io/lm1lc3n7/gladys-openevse:0.1.0",
+  "version": "0.1.1",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-openevse:0.1.1",
   "gladys_version": ">=5.1.0",
   "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-openevse/main/cover.png",
   "categories": ["energy"],

@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-21
+
 ### Added
 
 - OpenEVSE chargers (ESP32 WiFi firmware 4.x and 5.x) read over their local
@@ -61,4 +63,5 @@ the notes of the version's GitHub Release.
 - During a 5xx pause, start and the current say "server error", not "slow
   down".
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-openevse/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-openevse/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-openevse/releases/tag/v0.1.1
