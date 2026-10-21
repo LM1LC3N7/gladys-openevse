@@ -420,8 +420,11 @@ test('start and current refused on a firmware older than they need', async (t) =
   assert.equal(ack.success, false);
   assert.match(ack.error, /4\.1\.2/);
   server.charger.status = status({ state: 254, vehicle: 1 });
-  assert.equal((await press('start-charge')).success, true, 'start needs 4.0.1 only');
-  assert.deepEqual(server.posts(), [{ state: 'active' }]);
+  const start = await press('start-charge');
+  assert.equal(start.success, false, 'a start may post a current: 4.1.2 too');
+  assert.match(start.error, /4\.1\.2/);
+  assert.equal((await press('pause-charge')).success, true, 'the pause, whatever the firmware');
+  assert.deepEqual(server.posts(), [{ state: 'disabled' }]);
 });
 
 test('current: strict value, bounds, the pause kept, one change a minute', async (t) => {
@@ -448,7 +451,11 @@ test('current: strict value, bounds, the pause kept, one change a minute', async
   await advance(60 * SECOND);
   ack = await press('set-current', '8');
   assert.equal(ack.success, true, ack.error);
-  assert.deepEqual(server.posts().at(-1), { state: 'disabled', charge_current: 8 });
+  assert.deepEqual(server.posts().at(-1), {
+    charge_current: 8,
+    auto_release: true,
+    state: 'disabled',
+  });
 });
 
 test('a pause is never held back by a command in flight: sent at once, then again', async (t) => {
@@ -502,12 +509,241 @@ test('a start unconfirmed that lands after a pause: the pause is sent again', as
   assert.equal(ack.success, true, ack.error);
   await advance(60 * SECOND);
   assert.deepEqual(server.posts(), [
-    { state: 'active' },
+    { state: 'active', charge_current: 16 },
     { state: 'disabled' },
-    { state: 'disabled' },
+    { charge_current: 16, state: 'disabled' },
   ]);
   assert.equal(charger.override.state, 'disabled', 'the pause wins');
   assert.ok(logs.some((l) => /pause sent again/.test(l)));
+});
+
+test('M5: no pause reaffirmed once the vehicle left (auto release)', async (t) => {
+  const { server, press, charger, advance } = await setup(t, { config: ALLOWED });
+  charger.status = status({ state: 254, vehicle: 1 });
+  charger.postPlan = (index) => (index === 0 ? { applyAfter: 500, answerAfter: 10 * SECOND } : {});
+  await press('start-charge');
+  assert.equal((await press('pause-charge')).success, true);
+  charger.override = null;
+  charger.status = status({ state: 1, vehicle: 0 });
+  await advance(60 * SECOND);
+  assert.equal(server.posts().length, 2, 'never a paused override without a vehicle');
+});
+
+// --- Review 1 -------------------------------------------------------------------
+
+/** The device created by an earlier run, as a restart finds it in Gladys. */
+async function earlierDevice(t) {
+  const ctx = await setup(t);
+  const device = ctx.gladys.fake.devices.find((d) => d.external_id === DEVICE);
+  const kept = ctx.store.data.charger;
+  ctx.app.stop();
+  t.mock.timers.reset();
+  return { device: JSON.parse(JSON.stringify(device)), kept };
+}
+
+async function restart(t, { memory = {}, server = fakeCharger(), config: cfg = ALLOWED } = {}) {
+  const { device, kept } = await earlierDevice(t);
+  assert.deepEqual(kept, { address: HOST, serial: SERIAL }, 'the serial kept in /data');
+  const store = memoryStore({ ...memory, charger: kept });
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: NOW });
+  const gladys = createFakeGladys({ config: cfg, devices: [device] });
+  const app = new OpenEvseApp({
+    gladys,
+    logger: recorder([]),
+    transport: server.transport,
+    now: () => Date.now(),
+    store,
+  });
+  registerHandlers(gladys, app);
+  await gladys.connect();
+  await settle();
+  t.after(() => app.stop());
+  const advance = async (ms, step = SECOND) => {
+    for (let elapsed = 0; elapsed < ms; elapsed += step) {
+      t.mock.timers.tick(Math.min(step, ms - elapsed));
+      await settle();
+    }
+  };
+  const press = async (role, value = 1) => {
+    const found = gladys.fake.devices.find((d) => d.external_id === DEVICE);
+    const ack = gladys.fake.setValue(
+      found,
+      found.features.find((f) => f.external_id === feature(role)),
+      value,
+    );
+    await settle();
+    await advance(5 * SECOND, 100);
+    return ack;
+  };
+  return { gladys, app, server, store, advance, press };
+}
+
+for (const [name, memory] of [
+  ['a 5xx pause', { pause: { until: NOW + 5 * MINUTE, reason: '5xx' } }],
+  ['a 429 pause of 6 h', { pause: { until: NOW + 6 * HOUR, reason: '429' } }],
+  ['a credential block', { block: { until: NOW + HOUR, failures: 2 } }],
+]) {
+  test(`B1: after a restart during ${name}, the pause goes at once, without a read`, async (t) => {
+    const { server, press, gladys } = await restart(t, { memory });
+    assert.equal(server.requests.length, 0, 'no read');
+    const ack = await press('pause-charge');
+    assert.equal(ack.success, true, ack.error);
+    assert.deepEqual(server.paths(), ['POST /override']);
+    assert.deepEqual(server.posts(), [{ state: 'disabled' }]);
+    const start = await press('start-charge');
+    assert.equal(start.success, false, 'start waits for a read');
+    assert.doesNotMatch(
+      JSON.stringify(gladys.fake.connectionStatus.message),
+      /autre borne|another charger/,
+      'the same charger is never "another charger"',
+    );
+  });
+}
+
+test('B1: after a restart with the charger down, the pause goes as soon as it answers', async (t) => {
+  const server = fakeCharger({ down: true });
+  const { press, gladys } = await restart(t, { server });
+  assert.equal(gladys.fake.transports.at(-1).transport, DEVICE_TRANSPORTS.UNREACHABLE);
+  assert.equal(gladys.fake.lastState(feature('status')), 'Borne injoignable');
+  server.charger.down = false;
+  const ack = await press('pause-charge');
+  assert.equal(ack.success, true, ack.error);
+  assert.deepEqual(server.posts(), [{ state: 'disabled' }]);
+});
+
+test('B1: a serial kept for another address is not restored', async (t) => {
+  const server = fakeCharger({ down: true });
+  const { app } = await restart(t, {
+    server,
+    config: { host: '192.168.1.71', allow_commands: true },
+  });
+  assert.equal(app.charger.serial, undefined);
+});
+
+test('B1: nothing kept in /data (lost), a 5xx pause: the pause still goes to the address', async (t) => {
+  const { device } = await earlierDevice(t);
+  const store = memoryStore({ pause: { until: NOW + 5 * MINUTE, reason: '5xx' } });
+  const server = fakeCharger();
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: NOW });
+  const gladys = createFakeGladys({ config: ALLOWED, devices: [device] });
+  const app = new OpenEvseApp({
+    gladys,
+    logger: recorder([]),
+    transport: server.transport,
+    now: () => Date.now(),
+    store,
+  });
+  registerHandlers(gladys, app);
+  await gladys.connect();
+  await settle();
+  t.after(() => app.stop());
+  const found = gladys.fake.devices.find((d) => d.external_id === DEVICE);
+  const pause = found.features.find((f) => f.external_id === feature('pause-charge'));
+  const ack = await gladys.fake.setValue(found, pause, 1);
+  assert.equal(ack.success, true, ack.error);
+  assert.deepEqual(server.paths(), ['POST /override']);
+  const start = found.features.find((f) => f.external_id === feature('start-charge'));
+  assert.equal((await gladys.fake.setValue(found, start, 1)).success, false);
+});
+
+test('I1: a start never posts a current above the ceiling', async (t) => {
+  const { server, press, charger, advance } = await setup(t, { config: ALLOWED });
+  charger.status = status({ state: 254, vehicle: 1 });
+  charger.override = { state: 'disabled', charge_current: 32, auto_release: true };
+  assert.equal((await press('start-charge')).success, true);
+  assert.deepEqual(server.posts().at(-1), {
+    charge_current: 16,
+    auto_release: true,
+    state: 'active',
+  });
+  // No current in force: the charger's own (max_current_soft 32 A) is lowered to 16 A.
+  charger.status = status({ state: 254, vehicle: 1 });
+  charger.override = { state: 'disabled' };
+  await advance(61 * SECOND);
+  assert.equal((await press('start-charge')).success, true);
+  assert.deepEqual(server.posts().at(-1), { state: 'active', charge_current: 16 });
+  // Its own current under the ceiling: left as is.
+  charger.config.max_current_soft = 10;
+  charger.config.config_version = 7;
+  charger.status = status({ state: 254, vehicle: 1, config_version: 7 });
+  charger.override = { state: 'disabled' };
+  await advance(61 * SECOND);
+  assert.equal((await press('start-charge')).success, true);
+  assert.deepEqual(server.posts().at(-1), { state: 'active' });
+});
+
+test('I1: a start without the charger current known is refused', async (t) => {
+  const server = fakeCharger({ config: config({ max_current_soft: undefined }) });
+  const { press, charger } = await setup(t, { server, config: ALLOWED });
+  charger.status = status({ state: 254, vehicle: 1 });
+  const ack = await press('start-charge');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /n'a pas donné l'état/);
+  assert.deepEqual(server.posts(), []);
+});
+
+test('I2: the pause keeps the fields of the override in force, the start after it too', async (t) => {
+  const { server, press, charger, advance } = await setup(t, { config: ALLOWED });
+  charger.override = { charge_current: 10, energy_limit: 8000, auto_release: false };
+  await advance(30 * SECOND);
+  await press('pause-charge');
+  assert.deepEqual(server.posts().at(-1), {
+    charge_current: 10,
+    energy_limit: 8000,
+    auto_release: false,
+    state: 'disabled',
+  });
+  await advance(61 * SECOND);
+  await press('start-charge');
+  assert.deepEqual(server.posts().at(-1), {
+    charge_current: 10,
+    energy_limit: 8000,
+    auto_release: false,
+    state: 'active',
+  });
+});
+
+test('M1: a 404 of GET /override that is not the firmware\'s "none" refuses the current', async (t) => {
+  const { server, press, charger } = await setup(t, { config: ALLOWED });
+  charger.override = { state: 'disabled', auto_release: true };
+  charger.statuses['GET /override'] = 404;
+  const ack = await press('set-current', '10');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /n'a pas pu être relu/);
+  assert.deepEqual(server.posts(), []);
+});
+
+test('M2: credentials pasted in the address are never shown', async (t) => {
+  const server = fakeCharger();
+  const { gladys } = await setup(t, {
+    server,
+    config: { host: 'http://admin:S3cretPass@192.168.1.70/' },
+  });
+  const seen = JSON.stringify(gladys.fake.connectionStatus);
+  assert.ok(!seen.includes('S3cretPass'));
+  assert.match(message(gladys).fr, /leurs propres champs/);
+  assert.equal(server.requests.length, 0);
+});
+
+test('M4: pauses pressed in a loop never multiply the follow-up reads', async (t) => {
+  const { server, gladys, advance, target } = await setup(t, { config: ALLOWED });
+  const before = server.requests.filter((r) => r.path === '/status').length;
+  for (let i = 0; i < 10; i += 1) {
+    gladys.fake.setValue(...target('pause-charge'), 1);
+    await advance(SECOND, 100);
+  }
+  await advance(25 * SECOND, 100);
+  const reads = server.requests.filter((r) => r.path === '/status').length - before;
+  assert.ok(reads <= 3, `${reads} status reads in 35 s`);
+});
+
+test('M6: during a 5xx pause, start and current say "server error"', async (t) => {
+  const { press, charger, advance } = await setup(t, { config: ALLOWED });
+  charger.statuses['/status'] = 503;
+  await advance(30 * SECOND);
+  const ack = await press('set-current', '10');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /erreur serveur/);
 });
 
 test('an answer not understood: sent, without confirmation', async (t) => {

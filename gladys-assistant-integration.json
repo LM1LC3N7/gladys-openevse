@@ -67,8 +67,8 @@
         "fr": "Nom d'utilisateur de l'interface web"
       },
       "description": {
-        "en": "Only if the web interface of the charger asks for one (Settings, HTTP authentication). Leave empty otherwise.",
-        "fr": "Seulement si l'interface web de la borne en demande un (Réglages, authentification HTTP). Laissez vide sinon."
+        "en": "Only if the web interface of the charger asks for one (Settings, HTTP authentication). Leave empty otherwise. Never in the address field.",
+        "fr": "Seulement si l'interface web de la borne en demande un (Réglages, authentification HTTP). Laissez vide sinon. Jamais dans le champ de l'adresse."
       },
       "required": false,
       "default": ""
@@ -108,8 +108,8 @@
         "fr": "Plafond du courant de charge (A)"
       },
       "description": {
-        "en": "The highest current Gladys may ask for: the lower of this value (16 A by default) and the hardware maximum read from the charger.",
-        "fr": "Le courant le plus élevé que Gladys peut demander : le plus bas de cette valeur (16 A par défaut) et du maximum matériel lu sur la borne."
+        "en": "The highest current Gladys may ask for, the start included: the lower of this value (16 A by default) and the hardware maximum read from the charger.",
+        "fr": "Le courant le plus élevé que Gladys peut demander, démarrage compris : le plus bas de cette valeur (16 A par défaut) et du maximum matériel lu sur la borne."
       },
       "required": false,
       "default": 16,

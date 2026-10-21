@@ -76,9 +76,6 @@ const both = (en, fr) => ({ en, fr });
 const join = (a, b) => both(`${a.en} ${b.en}`, `${a.fr} ${b.fr}`);
 const round3 = (value) => Math.round(value * 1000) / 1000;
 
-/** A pause began in this cycle: it stops at once. */
-const PAUSED = 'paused';
-
 /** What the guard of a command compares: the override state and its current. */
 const overrideKey = (override) =>
   override ? `${override.state}:${override.chargeCurrent ?? 0}` : undefined;
@@ -105,6 +102,8 @@ const freshCharger = () => ({
   model: undefined,
   minHard: undefined,
   maxHard: undefined,
+  softMax: undefined,
+  /** When `/config` was last read; -Infinity: never since the start (a serial kept in /data). */
   configAt: -Infinity,
   configVersion: undefined,
   status: undefined,
@@ -179,6 +178,13 @@ export class OpenEvseApp {
       this.pausedUntil = Math.max(this.pausedUntil, this.memory.pause.until);
     }
     this.charger = freshCharger();
+    // The charger last read at this address: a pause works before any read
+    // (a pause or a block kept, the charger down at the start). Start and the
+    // current still wait for a read (configAt).
+    const kept = this.memory.charger;
+    if (this.config.address && kept?.address === addressKey(this.config.address)) {
+      this.charger.serial = kept.serial;
+    }
     this.indexGuard = undefined;
     this.indexFeature = undefined;
     this.savedIndex = undefined;
@@ -244,6 +250,7 @@ export class OpenEvseApp {
     return (
       JSON.stringify(next.address ?? null) !== JSON.stringify(this.config.address ?? null) ||
       next.invalidHost !== this.config.invalidHost ||
+      next.credentialsInHost !== this.config.credentialsInHost ||
       next.badAuth !== this.config.badAuth ||
       credentialsKey(next) !== credentialsKey(this.config)
     );
@@ -399,6 +406,7 @@ export class OpenEvseApp {
         this.logger.debug('OpenEVSE: read begun before a command, not applied');
       } else {
         this.applyRead(read);
+        await this.saveChargerId();
         await this.evaluateIndex();
         if (this.memory.block) {
           this.memory.block = null;
@@ -467,6 +475,7 @@ export class OpenEvseApp {
       c.configAt = this.now();
       if (!config.serial) {
         c.error = 'no_id';
+        c.serial = undefined;
         return;
       }
       if (c.serial && c.serial !== config.serial) {
@@ -485,6 +494,7 @@ export class OpenEvseApp {
         model: config.model,
         minHard: config.minHard,
         maxHard: config.maxHard,
+        softMax: config.softMax,
       });
     }
     if (!c.serial) {
@@ -494,6 +504,21 @@ export class OpenEvseApp {
     c.error = undefined;
     c.configVersion = status.configVersion ?? c.configVersion;
     this.applyLive(status, override);
+  }
+
+  /** Keeps in /data the serial read at this address, when it changed (src/store.js). */
+  async saveChargerId() {
+    const c = this.charger;
+    if (!c.serial || c.configAt === -Infinity) {
+      return;
+    }
+    const address = addressKey(this.config.address);
+    const kept = this.memory.charger;
+    if (kept?.address === address && kept.serial === c.serial) {
+      return;
+    }
+    this.memory.charger = { address, serial: c.serial };
+    await this.saveMemory();
   }
 
   /** fromCommand: the fresh read of a command (never reaffirms a pause: it would race it). */
@@ -514,9 +539,6 @@ export class OpenEvseApp {
   async failed(err) {
     const c = this.charger;
     const reason = errorReason(err);
-    if (err.kind === PAUSED) {
-      return undefined;
-    }
     if (err.kind === ERROR_KINDS.AUTH) {
       // Not read until new credentials or the end of the block: offline.
       c.online = false;
@@ -720,6 +742,9 @@ export class OpenEvseApp {
   status() {
     const c = this.charger;
     if (!this.config.address) {
+      if (this.config.credentialsInHost) {
+        return [false, T.hostCredentials];
+      }
       return [false, this.config.invalidHost ? T.invalidHost(this.config.invalidHost) : T.noHost];
     }
     if (this.config.badAuth) {
@@ -789,13 +814,30 @@ export class OpenEvseApp {
   }
 
   /**
+   * The charger to show in Gladys and whether it is reachable: the one read,
+   * or the one kept in /data while it cannot be read yet (down, blocked):
+   * offline. Undefined while nothing is known.
+   */
+  shown() {
+    const c = this.charger;
+    if (this.known()) {
+      return { charger: c, online: c.online !== false };
+    }
+    if (c.serial && (c.online === false || this.blocked)) {
+      return { charger: c, online: false };
+    }
+    return undefined;
+  }
+
+  /**
    * The serials of the devices created in Gladys that the charger read is not
-   * (another charger at this address, an address changed, or no answer since
-   * the start). Empty while a first read is still under way.
+   * (another charger at this address, or an address changed). With an address,
+   * empty until a read succeeded since the start (a charger down or blocked is
+   * not "another charger"); without one, every created device.
    */
   orphans() {
     const c = this.charger;
-    if (c.online === undefined && !this.blocked && this.config.address && !this.config.badAuth) {
+    if (this.config.address && !this.config.badAuth && c.configAt === -Infinity) {
       return [];
     }
     const serials = [];
@@ -869,9 +911,9 @@ export class OpenEvseApp {
         }
       }
     };
-    const c = this.known();
-    if (c) {
-      push(c.serial, c, c.online !== false);
+    const shown = this.shown();
+    if (shown) {
+      push(shown.charger.serial, shown.charger, shown.online);
     }
     // A created device the charger read is not: unreachable, never left "charging".
     for (const serial of this.orphans()) {
@@ -882,11 +924,12 @@ export class OpenEvseApp {
   async publishBadge() {
     const created = new Set((this.gladys.devices ?? []).map((d) => d.external_id));
     const entries = [];
-    const c = this.known();
-    if (c && created.has(chargerIds(this.gladys, c.serial).device)) {
+    const shown = this.shown();
+    const id = shown && chargerIds(this.gladys, shown.charger.serial).device;
+    if (shown && created.has(id)) {
       entries.push({
-        external_id: chargerIds(this.gladys, c.serial).device,
-        transport: c.online === false ? DEVICE_TRANSPORTS.UNREACHABLE : DEVICE_TRANSPORTS.LOCAL,
+        external_id: id,
+        transport: shown.online ? DEVICE_TRANSPORTS.LOCAL : DEVICE_TRANSPORTS.UNREACHABLE,
       });
     }
     for (const serial of this.orphans()) {
@@ -1005,7 +1048,7 @@ export class OpenEvseApp {
     if (!this.config.allowCommands) {
       throw this.refusal(ERRORS.disabled);
     }
-    if (target.serial !== this.charger.serial) {
+    if (!this.addressed(target.serial, target.role)) {
       throw this.refusal(ERRORS.unknownCharger);
     }
     const { role } = target;
@@ -1048,24 +1091,51 @@ export class OpenEvseApp {
     }
   }
 
+  /**
+   * Whether a command for `serial` goes to the charger at the address: the
+   * one read (or kept in /data). A pause also goes when no charger is known
+   * yet since the start (no serial kept, nothing read: /data lost, the
+   * charger down, a pause or a block): a pause is never held back, and
+   * pausing whatever answers at the configured address is harmless.
+   */
+  addressed(serial, role) {
+    const c = this.charger;
+    if (c.serial === serial) {
+      return true;
+    }
+    return (
+      role === FEATURES.PAUSE &&
+      c.serial === undefined &&
+      c.configAt === -Infinity &&
+      Boolean(this.config.address)
+    );
+  }
+
   /** The checks before sending, on the latest configuration. */
   checkBeforeSend(generation, serial, role) {
     if (!this.config.allowCommands) {
       throw this.refusal(ERRORS.disabled);
     }
-    if (generation !== this.generation || this.charger.serial !== serial) {
+    if (generation !== this.generation || !this.addressed(serial, role)) {
       throw this.refusal(ERRORS.unknownCharger);
     }
     if (role === FEATURES.PAUSE) {
       // Never held back: not by a 429 pause, a block, the minute nor the firmware.
       return;
     }
-    const needed = role === FEATURES.START ? FIRMWARE.override : FIRMWARE.current;
-    if (!atLeast(this.charger.version, needed)) {
-      throw this.refusal(ERRORS.oldFirmware(versionText(needed)));
+    if (this.charger.configAt === -Infinity) {
+      // A serial kept in /data, not read since the start: version and bounds unknown.
+      throw this.refusal(ERRORS.notReadYet);
+    }
+    // Both may post `charge_current` (a start keeps the ceiling): firmware 4.1.2.
+    if (!atLeast(this.charger.version, FIRMWARE.current)) {
+      throw this.refusal(ERRORS.oldFirmware(versionText(FIRMWARE.current)));
     }
     if (this.paused) {
-      throw this.refusal(ERRORS.paused(age(this.pausedUntil - this.now())));
+      const wait = age(this.pausedUntil - this.now());
+      throw this.refusal(
+        this.memory.pause?.reason === '5xx' ? ERRORS.pausedServer(wait) : ERRORS.paused(wait),
+      );
     }
     if (this.blocked) {
       throw this.refusal(ERRORS.noCredentials);
@@ -1108,10 +1178,10 @@ export class OpenEvseApp {
    * `set_override`): the firmware would clear them otherwise.
    */
   plan(role, wanted, fresh, serial) {
-    const from = overrideKey(this.charger.override);
     if (role === FEATURES.PAUSE) {
-      // Always sent: one request, no read, nothing to decide.
-      return { body: { state: OVERRIDE.DISABLED }, from, expected: `${OVERRIDE.DISABLED}:0` };
+      // Always sent: one request, no read, nothing to decide; the fields of
+      // the override last read are kept (a POST replaces the whole override).
+      return this.pausePlan();
     }
     const guarded = this.guardActive(serial);
     const { override } = fresh;
@@ -1129,10 +1199,21 @@ export class OpenEvseApp {
       if (status.state === STATE.CHARGING && override.state !== OVERRIDE.DISABLED && !guarded) {
         return undefined;
       }
+      // Never above the ceiling: the current of the override in force, else
+      // the charger's own current (`max_current_soft`), lowered to it.
+      const { high } = currentBounds(this.charger, this.config.maxCurrent);
+      const body = { ...override.fields, state: OVERRIDE.ACTIVE };
+      if (override.chargeCurrent !== undefined) {
+        body.charge_current = Math.min(override.chargeCurrent, high);
+      } else if (this.charger.softMax === undefined) {
+        throw this.refusal(ERRORS.missing);
+      } else if (this.charger.softMax > high) {
+        body.charge_current = high;
+      }
       return {
-        body: { ...override.fields, state: OVERRIDE.ACTIVE },
+        body,
         from: overrideKey(override),
-        expected: `${OVERRIDE.ACTIVE}:${override.chargeCurrent ?? 0}`,
+        expected: `${OVERRIDE.ACTIVE}:${body.charge_current > 0 ? body.charge_current : 0}`,
       };
     }
     const { low, high } = currentBounds(this.charger, this.config.maxCurrent);
@@ -1248,15 +1329,28 @@ export class OpenEvseApp {
     this.pauseAgain(serial, entry);
   }
 
+  /**
+   * The pause: the fields of the override last read posted again (a POST
+   * replaces the whole override: its current, limits and auto release must
+   * survive the pause), with `state: "disabled"`. No read: never held back.
+   */
+  pausePlan() {
+    const last = this.charger.override;
+    return {
+      body: { ...(last?.fields ?? {}), state: OVERRIDE.DISABLED },
+      from: overrideKey(last),
+      expected: `${OVERRIDE.DISABLED}:${last?.chargeCurrent ?? 0}`,
+      pause: true,
+    };
+  }
+
   /** Sends the pause once more, without a read nor an option check (it was accepted). */
-  sendPause() {
+  sendPause(plan = this.pausePlan()) {
     this.charger.lastSentAt = this.now();
-    return this.client.setOverride(
-      this.config.address,
-      this.config.auth,
-      { state: OVERRIDE.DISABLED },
-      { startBy: Infinity, timeoutMs: TIMINGS.readTimeout },
-    );
+    return this.client.setOverride(this.config.address, this.config.auth, plan.body, {
+      startBy: Infinity,
+      timeoutMs: TIMINGS.readTimeout,
+    });
   }
 
   /**
@@ -1280,16 +1374,13 @@ export class OpenEvseApp {
           this.logger.info('OpenEVSE: pause not sent again (newer command sent)');
           return;
         }
-        if (this.charger.serial !== serial) {
+        if (!this.addressed(serial, FEATURES.PAUSE)) {
           return;
         }
         this.logger.warn('OpenEVSE: pause sent again after the command in flight');
-        await this.sendPause();
-        this.guard(
-          serial,
-          { from: overrideKey(this.charger.override), expected: `${OVERRIDE.DISABLED}:0` },
-          this.unconfirmed ? entry.sentAt : undefined,
-        );
+        const plan = this.pausePlan();
+        await this.sendPause(plan);
+        this.guard(serial, plan, this.unconfirmed ? entry.sentAt : undefined);
       })
       .catch(async (err) => {
         this.logger.warn(`OpenEVSE: pause again failed (${errorReason(err)})`);
@@ -1301,10 +1392,18 @@ export class OpenEvseApp {
       .catch(() => {});
   }
 
-  /** Spaced reads after a command: its effect, then a check (each a new read). */
+  /**
+   * Spaced reads after a command: its effect, then a check (each a new read).
+   * The reads of an earlier command not done yet are replaced: a scene
+   * pressing in a loop never multiplies them.
+   */
   followUp() {
     const generation = this.generation;
     const c = this.charger;
+    for (const handle of c.followUps) {
+      this.timers.clearTimeout(handle);
+    }
+    c.followUps.clear();
     for (const delay of TIMINGS.followUps) {
       const handle = this.timers.setTimeout(() => {
         c.followUps.delete(handle);
@@ -1337,7 +1436,7 @@ export class OpenEvseApp {
   guard(serial, plan, reassertFrom) {
     const key = `${serial}:override`;
     const held = this.guards.get(key);
-    const pause = plan.expected === `${OVERRIDE.DISABLED}:0`;
+    const pause = plan.pause === true;
     // A pause sent again keeps the reaffirmation of the pause it repeats.
     const keep = held?.reassertFrom !== undefined && pause && this.guardActive(serial);
     this.guards.set(key, {
@@ -1375,8 +1474,11 @@ export class OpenEvseApp {
       // A pause to reaffirm: the guard holds its 90 s. The charge allowed
       // again while no start nor current left since the pause is a late
       // command landing after it: the pause is sent again, twice at most.
+      // Not once the vehicle left (auto release cleared the override): a
+      // paused override would then hold the next charge.
       if (
         override.state !== OVERRIDE.DISABLED &&
+        this.charger.status?.vehicle === 1 &&
         !fromCommand &&
         !(this.inFlight && this.inFlight.role !== FEATURES.PAUSE) &&
         this.charger.lastCurrentAt <= guard.reassertFrom &&

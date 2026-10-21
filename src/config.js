@@ -81,7 +81,9 @@ export function normalizeConfig(raw = {}) {
     }
   }
   const host = String(c.host ?? '').trim();
-  const address = parseAddress(host);
+  // A pasted URL with `user:password@`: never parsed, never shown (it holds a password).
+  const credentialsInHost = host.includes('@');
+  const address = credentialsInHost ? undefined : parseAddress(host);
   // A user name never holds a colon (Basic auth joins the two with one).
   const username = ascii(c.username);
   const user = username.includes(':') ? '' : username;
@@ -90,8 +92,10 @@ export function normalizeConfig(raw = {}) {
   const ceiling = Number(c.max_current);
   return {
     address,
-    /** The text typed when it is not an address (shown in the status, cut). */
-    invalidHost: host !== '' && !address ? host.slice(0, 100) : undefined,
+    /** The text typed when it is not an address (shown in the status, cut); never with an `@`. */
+    invalidHost: host !== '' && !address && !credentialsInHost ? host.slice(0, 100) : undefined,
+    /** Credentials typed in the address field: a fixed message, the text never shown. */
+    credentialsInHost,
     /** Basic auth when both are given; none when both are empty. */
     auth: user && password ? { user, password } : undefined,
     /** Only one of the two given, or one refused (non-ASCII, too long, a colon). */

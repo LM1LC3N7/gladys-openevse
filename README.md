@@ -19,7 +19,7 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (OpenEvseApp)
                                   ├─ src/devices.js          the device and its states (pure)
                                   ├─ src/guard.js            energy index guard (gladys-p1-monitor's, maxKw as a parameter)
                                   ├─ src/publisher.js        states within 300/min
-                                  └─ src/store.js            /data/openevse-state.json (pauses, block, index guard; no secret)
+                                  └─ src/store.js            /data/openevse-state.json (pauses, block, index guard, last serial; no secret)
 ```
 
 - **Credentials**: none, or the user name and password of the web interface
@@ -27,8 +27,8 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (OpenEvseApp)
   15 min, 1 h, then 6 h (kept in `/data`, no secret in it).
 - **Reads**: `GET /config` at the start, every hour and when `config_version`
   changes (only `wifi_serial`, `version`, `firmware`, `buildenv`,
-  `min_current_hard`, `max_current_hard` are read: the answer also holds the
-  charger's own passwords), `GET /status` and `GET /override` every 30 s
+  `min_current_hard`, `max_current_hard`, `max_current_soft` are read: the
+  answer also holds the charger's own passwords), `GET /status` and `GET /override` every 30 s
   (configurable, 10 s – 10 min). An override that fails never blocks the
   status. Failures retried after 30 s, 1, 2, 5 min, never under the interval;
   429 and 5xx pause, kept in `/data`.
@@ -42,8 +42,11 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (OpenEvseApp)
   core's `charging-station` category. No `publishEnergyConsumption`.
 - **Commands** (`allow_commands`, off by default): two `button/push` features
   (start, pause) and a `text/select` (6 A to the ceiling), never a switch nor
-  a writable binary. All three `POST /override` (firmware 4.0.1, 4.1.2 for the
-  current), posting the fields of the override in force again. Start and the
+  a writable binary. All three `POST /override` (start and current: firmware
+  4.1.2), posting the fields of the override in force (the last one read, for
+  the pause) again. Start and the current never exceed the ceiling (a start
+  lowers the override's or the charger's own current to it). A 404 of
+  `GET /override` means "none" only with the firmware's JSON `msg`. Start and the
   current read status and override first and decide on that read only, check
   the option again right before sending, leave within 3.5 s of the click or
   are refused unsent, and are answered by 4.3 s; a silence, a 5xx or an
@@ -51,8 +54,10 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (OpenEvseApp)
   5 s and 20 s later. Start refused without a vehicle or on a fault; one
   start or current a minute. The pause is never held back (no read, one
   request, through a 429/5xx pause, a block, the minute or a command in
-  flight, which gives way if not sent yet). A poll read begun before a
-  command left is quarantined.
+  flight, which gives way if not sent yet; before any read after a restart,
+  the serial last read at the address being kept in `/data`); never
+  reaffirmed once the vehicle left. Follow-up reads are never stacked. A poll
+  read begun before a command left is quarantined.
 - **Hostile answers**: 64 KB at most, only own fields read with their exact
   type (no prototype pollution; a missing value refuses a command), no answer
   text in the logs, no User-Agent of any kind.

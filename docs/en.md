@@ -60,7 +60,7 @@ consumption is published.
 1. Give the charger a **fixed IP address** in your router (or use its name
    `openevse-xxxx.local`).
 2. Check in its web interface that the **WiFi firmware is 4.0 or later**
-   (4.1.2 for the charging current). Firmwares 2.x and 3.x give no serial
+   (4.1.2 to start the charge and set the current). Firmwares 2.x and 3.x give no serial
    number: they are not supported.
 3. Install the integration from the Gladys store. In its configuration, enter
    the **IP address of the charger**, and, only if its web interface asks for
@@ -73,8 +73,9 @@ plain HTTP: the user name and the password travel **in clear** on your local
 network, as with the web interface itself. Keep the charger on a trusted
 network. They are never written to the logs, to `/data`, nor to a state. The
 configuration of the charger also holds its own passwords (WiFi, MQTT…): the
-integration only reads its identity, versions and current bounds from it,
-nothing else is kept.
+integration only reads its identity, versions and currents (minimum,
+maximum, its own current) from it, nothing else is kept. Never paste an
+address with `user:password@`: it is refused, and never shown.
 
 The **Test the connection** button reads the charger once (at most every
 10 seconds).
@@ -85,16 +86,22 @@ The **Test the connection** button reads the charger once (at most every
 every command while **Allow the commands** is off. On, they go through the
 **manual override** of the charger (`/override`):
 
-- **Pause** sets a "paused" override: the charger stops charging. The pause
-  is **never held back**: it goes at once, in one request, without a read,
-  even during another command (which gives way if it has not left yet;
-  otherwise the pause is sent once more when it settles), even within the
-  minute after a start, even during a 429 or 5xx pause, even right after the
-  credentials were refused, whatever the firmware;
+- **Pause** sets a "paused" override: the charger stops charging. The
+  settings of the override in force (current, session limits, auto release)
+  are kept. The pause is **never held back**: it goes at once, in one
+  request, without a read, even during another command (which gives way if
+  it has not left yet; otherwise the pause is sent once more when it
+  settles), even within the minute after a start, even during a 429 or 5xx
+  pause, even right after the credentials were refused, whatever the
+  firmware, and even right after a restart of the integration, before any
+  read of the charger (its serial is kept in `/data`);
 - **Start** sets a "charge" override (the settings of the override in force
-  are kept); **refused without a vehicle plugged in**, or on a fault or an
-  unknown state; no effect (not sent) when the charger already charges
-  without a pause;
+  are kept); **never above the ceiling**: the current of the override in
+  force, else the charger's own current (`max_current_soft`), is lowered to
+  it; refused when the charger does not give its current; **refused without
+  a vehicle plugged in**, or on a fault or an unknown state; no effect (not
+  sent) when the charger already charges without a pause; after a restart, it
+  waits for a first read of the charger;
 - **Charging current**: from 6 A (or the hardware minimum of the charger) to
   the **ceiling**: the lower of the "Ceiling of the charging current" of the
   configuration (16 A by default, 80 A at most) and the hardware maximum read
@@ -121,7 +128,10 @@ within the next 90 seconds is watched, and sent again (twice at most) if a
 read shows the charge allowed again while no other command left.
 
 The manual override keeps the behaviour of the charger: with "auto release"
-(a setting of the override), it ends when the vehicle is unplugged.
+(a setting of the override), it ends when the vehicle is unplugged; a pause
+is then never reaffirmed without a vehicle. When the charger cannot say there
+is no override (a 404 without the firmware's message), start and the current
+are refused.
 
 ## Errors and limits
 

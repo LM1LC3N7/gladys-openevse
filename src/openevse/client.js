@@ -86,6 +86,8 @@ export function parseConfig(data) {
     model: text(own(data, 'buildenv')),
     minHard: amperes(own(data, 'min_current_hard')),
     maxHard: amperes(own(data, 'max_current_hard')),
+    /** The charger's own charging current, used when no override sets one (a start). */
+    softMax: amperes(own(data, 'max_current_soft')),
   };
 }
 
@@ -248,16 +250,34 @@ export class OpenEvseClient {
     );
   }
 
-  /** GET /override -> the override in force; a 404 means none (python-openevse-http). */
+  /**
+   * GET /override -> the override in force. A 404 means none only when the
+   * firmware says so (a JSON `msg`): an empty or text 404 (no such route, a
+   * proxy) is an error, so a command is never decided on a guessed "none".
+   */
   async override(address, auth, { timeoutMs }) {
-    try {
-      return parseOverride(await this.get(address, auth, PATHS.override, { timeoutMs }));
-    } catch (err) {
-      if (err.kind === ERROR_KINDS.HTTP && err.status === 404) {
+    const response = await this.transport({
+      ...address,
+      method: 'GET',
+      path: PATHS.override,
+      headers: authHeaders(auth),
+      timeoutMs,
+    });
+    if (response.status === 404) {
+      let answer;
+      try {
+        answer = JSON.parse(response.body);
+      } catch {
+        answer = undefined;
+      }
+      if (plain(answer) && typeof own(answer, 'msg') === 'string') {
         return NO_OVERRIDE;
       }
-      throw err;
     }
+    if (!ok(response)) {
+      throw statusError(response, this.now());
+    }
+    return parseOverride(json(response));
   }
 
   /**

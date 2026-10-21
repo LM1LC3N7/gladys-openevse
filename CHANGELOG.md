@@ -39,4 +39,26 @@ the notes of the version's GitHub Release.
   English and French; `LICENSE` and `THIRD_PARTY_NOTICES.md` shipped in the
   image.
 
+### Fixed
+
+- "Pause charging" is no longer refused after a restart of the integration
+  (a 429/5xx pause or a credential block kept, the charger down at the
+  start): the serial last read at the address is kept in `/data`, and the
+  pause goes to the address even before any read.
+- A start never asks for more than the ceiling: the current of the override
+  in force, or the charger's own current (`max_current_soft`), is lowered to
+  it; start now needs the WiFi firmware 4.1.2, as the current.
+- The pause keeps the fields of the override in force (current, session
+  limits, auto release) instead of clearing them.
+- A 404 of `GET /override` without the firmware's message refuses start and
+  the current instead of reading "no override".
+- Credentials pasted in the address (`user:password@`) are never shown in the
+  status.
+- After a restart, a charger down or blocked is no longer shown as "another
+  charger".
+- Follow-up reads after commands pressed in a loop are no longer stacked.
+- A pause is no longer reaffirmed once the vehicle left.
+- During a 5xx pause, start and the current say "server error", not "slow
+  down".
+
 [Unreleased]: https://github.com/LM1LC3N7/gladys-openevse/commits/main

@@ -25,6 +25,7 @@ test('config: identity, versions and bounds only, never a secret', () => {
     model: 'openevse_wifi_v1',
     minHard: 6,
     maxHard: 32,
+    softMax: 32,
   });
   assert.ok(!JSON.stringify(c).includes('secret'));
   assert.equal(parseConfig(config({ wifi_serial: '../etc' })).serial, undefined);
@@ -204,5 +205,16 @@ test('the memory in /data is repaired and bounded, and holds no secret', () => {
   assert.equal(memory.block.until, now + 6 * 3_600_000);
   assert.deepEqual(memory.index, { featureId: 'f', last: { value: 5, at: 1 }, held: null });
   assert.ok(!JSON.stringify(memory).includes('leak'));
-  assert.deepEqual(normalizeMemory('garbage', now), { pause: null, block: null, index: null });
+  assert.deepEqual(normalizeMemory('garbage', now), {
+    pause: null,
+    block: null,
+    index: null,
+    charger: null,
+  });
+  assert.deepEqual(
+    normalizeMemory({ charger: { address: '192.168.1.70', serial: '1234567890ab', x: 1 } }, now)
+      .charger,
+    { address: '192.168.1.70', serial: '1234567890ab' },
+  );
+  assert.equal(normalizeMemory({ charger: { address: 'h', serial: '../x' } }, now).charger, null);
 });

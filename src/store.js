@@ -4,10 +4,13 @@
 // name and password refused (so a restart never asks the charger again before
 // its time, never loops on refused credentials), and the energy index guard
 // (its reference and the value it holds back, so a jump or a drop never
-// reaches Gladys after a restart). Bounded when read back: a pause never more
-// than 6 h away, a block never more than the longest new-try delay.
+// reaches Gladys after a restart), and the serial of the charger last read at
+// the address (so a pause is never refused before the first read). Bounded
+// when read back: a pause never more than 6 h away, a block never more than
+// the longest new-try delay.
 // NO SECRET: neither the user name, nor the password, nor anything derived
-// from them, nor any field of the charger's `/config`. The file is readable by
+// from them, nor any field of the charger's `/config` but its serial (the id
+// of the device). The file is readable by
 // the container user only (0600).
 // -----------------------------------------------------------------------------
 
@@ -88,7 +91,7 @@ function indexOf(raw) {
 /**
  * The persisted state, repaired and bounded: `{ pause: { until, reason } |
  * null, block: { until, failures } | null, index: { featureId, last, held } |
- * null }`.
+ * null, charger: { address, serial } | null }`.
  */
 export function normalizeMemory(raw, now) {
   const data = object(raw);
@@ -111,5 +114,22 @@ export function normalizeMemory(raw, now) {
         }
       : null,
     index: indexOf(data.index),
+    charger: chargerOf(data.charger),
   };
+}
+
+/**
+ * The last charger read at an address (`{ address, serial }`, the id of the
+ * device, not a secret): restored at a start so that "Pause charging" works
+ * before any read (a pause or a block kept, the charger down at the start).
+ */
+function chargerOf(raw) {
+  const charger = object(raw);
+  return typeof charger.address === 'string' &&
+    charger.address.length > 0 &&
+    charger.address.length <= 300 &&
+    typeof charger.serial === 'string' &&
+    /^[0-9a-f]{12}$/.test(charger.serial)
+    ? { address: charger.address, serial: charger.serial }
+    : null;
 }

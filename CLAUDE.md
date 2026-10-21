@@ -38,7 +38,7 @@ src/devices.js                    device and states of the charger (pure); featu
 src/guard.js                      energy index guard (gladys-p1-monitor's, approved; maxKw a parameter)
 src/openevse/client.js            /config, /status, /override, answer parsing (pure parsers)
 src/openevse/http.js              one bounded HTTP exchange (node:http), error kinds
-src/store.js                      /data/openevse-state.json: pauses, block, index guard; no secret
+src/store.js                      /data/openevse-state.json: pauses, block, index guard, last serial; no secret
 src/publisher.js                  states to Gladys within 300 per minute
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
 src/i18n.js                       English and French runtime texts
@@ -82,12 +82,18 @@ test/                             node --test, against the SDK's fake Gladys (in
   in English. Tests never touch the network.
 - **OpenEVSE.** Commands stay behind `allow_commands` (off by default), are
   buttons and a select (never a switch), and all `POST /override` with the
-  fields in force posted again. Start and the current are decided on a fresh
-  read (status, override), checked again right before sending, one a minute;
-  start refused without a vehicle or on a fault; the current keeps the
-  override state (a pause stays a pause). "Pause charging" is never held back
-  (no read, through a command in flight, the minute, a pause, a block, the
-  firmware) and is reaffirmed within 90 s of an unconfirmed command. A read
+  fields in force posted again (the pause: those of the override last read).
+  Start and the current are decided on a fresh read (status, override),
+  checked again right before sending, one a minute, firmware 4.1.2, never
+  above the ceiling (a start lowers the current in force or
+  `max_current_soft` to it); start refused without a vehicle or on a fault;
+  the current keeps the override state (a pause stays a pause). A 404 of
+  `GET /override` is "none" only with a JSON `msg`. "Pause charging" is never
+  held back (no read, through a command in flight, the minute, a pause, a
+  block, the firmware, and before any read after a restart: the serial last
+  read at the address is kept in `/data`) and is reaffirmed within 90 s of an
+  unconfirmed command, only while a vehicle is plugged in. Follow-up reads
+  replace each other. A read
   begun before a command left is never applied. Refused credentials block the
   tries (15 min, 1 h, 6 h, in `/data`). The total energy is an
   `energy-sensor/index` and only ever goes through `src/guard.js`: keep that

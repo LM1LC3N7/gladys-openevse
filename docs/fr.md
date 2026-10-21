@@ -62,7 +62,7 @@ soit pas comptée deux fois. Aucune consommation journalière n'est publiée.
 1. Donnez à la borne une **adresse IP fixe** dans votre box (ou utilisez son
    nom `openevse-xxxx.local`).
 2. Vérifiez dans son interface web que le **firmware WiFi est en 4.0 ou plus
-   récent** (4.1.2 pour le courant de charge). Les firmwares 2.x et 3.x ne
+   récent** (4.1.2 pour démarrer la charge et régler le courant). Les firmwares 2.x et 3.x ne
    donnent pas de numéro de série : ils ne sont pas pris en charge.
 3. Installez l'intégration depuis le store de Gladys. Dans sa configuration,
    saisissez l'**adresse IP de la borne**, et, seulement si son interface web
@@ -77,7 +77,9 @@ réseau local, comme avec l'interface web elle-même. Gardez la borne sur un
 réseau de confiance. Ils ne sont jamais écrits dans les journaux, ni dans
 `/data`, ni dans un état. La configuration de la borne contient aussi ses
 propres mots de passe (WiFi, MQTT…) : l'intégration n'en lit que l'identité,
-les versions et les bornes de courant, rien d'autre n'est gardé.
+les versions et les courants (minimum, maximum, courant propre), rien
+d'autre n'est gardé. Ne collez jamais une adresse avec `nom:motdepasse@` :
+elle est refusée, et jamais affichée.
 
 Le bouton **Tester la connexion** lit la borne une fois (au plus toutes les
 10 secondes).
@@ -90,15 +92,22 @@ désactivé. Activé, elles passent par le **forçage manuel** de la borne
 (`/override`) :
 
 - **Mettre en pause** pose un forçage « en pause » : la borne arrête de
-  charger. La pause n'est **jamais retenue** : elle part tout de suite, en une
-  seule requête, sans relecture, même pendant une autre commande (qui lui
-  cède la place si elle n'est pas encore partie ; sinon la pause est renvoyée
-  une fois quand elle se termine), même dans la minute qui suit un
-  démarrage, même pendant une pause 429 ou 5xx, même quand les identifiants
-  viennent d'être refusés, quel que soit le firmware ;
+  charger. Les réglages du forçage en cours (courant, limites de session,
+  libération automatique) sont gardés. La pause n'est **jamais retenue** :
+  elle part tout de suite, en une seule requête, sans relecture, même pendant
+  une autre commande (qui lui cède la place si elle n'est pas encore partie ;
+  sinon la pause est renvoyée une fois quand elle se termine), même dans la
+  minute qui suit un démarrage, même pendant une pause 429 ou 5xx, même quand
+  les identifiants viennent d'être refusés, quel que soit le firmware, et même
+  juste après un redémarrage de l'intégration, avant toute lecture de la
+  borne (le numéro de série de la borne est gardé dans `/data`) ;
 - **Démarrer** pose un forçage « charge » (les réglages du forçage en cours
-  sont gardés) ; **refusé sans véhicule branché**, ou sur un défaut ou un état
-  inconnu ; sans effet (non envoyé) si la borne charge déjà sans pause ;
+  sont gardés) ; **jamais au-dessus du plafond** : le courant du forçage en
+  cours, sinon le courant propre de la borne (`max_current_soft`), est ramené
+  au plafond ; refusé si la borne ne donne pas son courant ; **refusé sans
+  véhicule branché**, ou sur un défaut ou un état inconnu ; sans effet (non
+  envoyé) si la borne charge déjà sans pause ; après un redémarrage, il
+  attend une première lecture de la borne ;
 - **Courant de charge** : de 6 A (ou le minimum matériel de la borne) au
   **plafond** : le plus bas du « Plafond du courant de charge » de la
   configuration (16 A par défaut, 80 A au plus) et du maximum matériel lu sur
@@ -128,7 +137,9 @@ la charge permise alors qu'aucune autre commande n'est partie.
 
 Le forçage manuel garde le comportement de la borne : avec « libération
 automatique » (réglage du forçage), il prend fin quand le véhicule est
-débranché.
+débranché ; une pause n'est alors jamais réaffirmée sans véhicule. Si la
+borne ne peut pas dire qu'il n'y a aucun forçage (une réponse 404 sans le
+message du firmware), démarrer et le courant sont refusés.
 
 ## Erreurs et limites
 

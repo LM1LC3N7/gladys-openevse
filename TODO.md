@@ -25,6 +25,15 @@ up to date at the end of every milestone.
       or current a minute, late reads quarantined, 429/5xx pauses and
       credential blocks persisted, test button, docs en/fr, cover. Tested
       against made-up answers only.
+- [x] **Milestone 1 fixes — review 1** (2026-10-21): pause after a restart
+      before any read (B1: last serial kept in `/data`, pause to the address
+      even without it), start bounded by the ceiling (I1: override current or
+      `max_current_soft` lowered, firmware 4.1.2), pause keeps the override
+      fields (I2), and M1-M7 (404 of `/override` only "none" with a `msg`,
+      credentials in the address never shown, no "another charger" before a
+      read, follow-up reads not stacked, no reaffirmed pause without a
+      vehicle, 5xx refusal text, dead code). Reviewer scenarios in
+      `test/app.test.js` ("B1", "I1", "I2", "M1"…).
 - [ ] **Milestone 2 — real charger**: run against a real OpenEVSE (see "To
       check"), turn the answers (anonymized) into fixtures.
 - [ ] **Milestone 3 — more**: the websocket (`/ws`, live status instead of
@@ -68,10 +77,34 @@ up to date at the end of every milestone.
   of the device) is missing from 2.x and 3.x; no RAPI (`/r`). Start needs
   4.0.1 (`/override`), the current 4.1.2 (as the library's `set_current`); an
   unknown version (a dev build name) refuses both. The pause is sent whatever
-  the version (a missing route answers 404: refused, said so).
+  the version (a missing route answers 404: refused, said so). (Review 1)
+  start needs 4.1.2 too: it may post `charge_current` to keep the ceiling.
+- **Start bounded by the ceiling** (review 1, as Peblar): the
+  `charge_current` of the override in force is lowered to the ceiling (never
+  raised); without one, `max_current_soft` of `/config` (the 7th field read,
+  the charger's own current) above the ceiling gives `charge_current` = the
+  ceiling, under it nothing is added; missing: start refused.
+- **The serial last read is kept in `/data`** with the address key (the id
+  of the device, not a secret), restored at a start for the same address:
+  the pause works before any read; start and the current wait for a read
+  (version and bounds unknown). With no serial kept (/data lost), a pause is
+  still sent to the configured address while no charger was read since the
+  start (pausing whatever answers there is harmless). No orphan is shown
+  until a read succeeded.
+- **The pause posts the fields of the override last read** (no read before
+  it), `state: "disabled"`; sent again and reaffirmed the same way.
+  Reaffirmed only while a vehicle is plugged in (auto release).
+- **A 404 of `GET /override` is "none" only with a JSON `msg`** (the
+  firmware's answer); empty or text: an error, start and current refused.
+- **Credentials typed in the address** (`@`): never parsed nor shown, a
+  fixed message.
+- **Follow-up reads**: a new command replaces the pending ones (at most one
+  per delay). gladys-peblar has the same stacking and the same "pause refused
+  before the first read after a restart" pattern (`src/app.js`), to check
+  separately (reported to Louis by the review).
 - **Commands through the manual override only** (`POST /override`, the
   fields in force posted again): start = `state: "active"`, pause =
-  `state: "disabled"` (alone, no read), current = `charge_current` with the
+  `state: "disabled"` (no read, the fields last read kept: review 1), current = `charge_current` with the
   state of the override in force kept (a pause stays a pause, so no "stopped"
   refusal as on Peblar). Never `/config` (`max_current_soft` would be a
   setting written to the flash of the charger), never `DELETE /override`
@@ -92,7 +125,7 @@ up to date at the end of every milestone.
   it. The docs say to put the charger under the main meter in the Energy
   settings. The session energy stays a plain sensor.
 - **`/config` holds secrets** (WiFi, MQTT, emoncms, web passwords): only
-  six named fields are read; the answer is never logged, stored nor kept.
+  seven named fields are read; the answer is never logged, stored nor kept.
 - **No User-Agent, no `X-Requested-With`**: node:http sends neither; the
   firmware asks the latter only for actuators sent by GET, and every command
   here is a POST.

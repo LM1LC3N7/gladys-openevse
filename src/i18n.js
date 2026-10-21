@@ -96,6 +96,10 @@ export const T = {
       `"${typed}" is not an IP address nor a host name.`,
       `« ${typed} » n'est ni une adresse IP ni un nom d'hôte.`,
     ),
+  hostCredentials: both(
+    'The address holds a user name or a password ("user:password@"): enter only the IP address of the charger there, and the user name and password in their own fields, then save.',
+    "L'adresse contient un nom d'utilisateur ou un mot de passe (« nom:motdepasse@ ») : n'y mettez que l'adresse IP de la borne, et le nom et le mot de passe dans leurs propres champs, puis enregistrez.",
+  ),
   incompleteAuth: both(
     'Enter both the user name and the password of the web interface, or neither, then save.',
     "Saisissez à la fois le nom d'utilisateur et le mot de passe de l'interface web, ou aucun des deux, puis enregistrez.",
@@ -208,6 +212,15 @@ export const ERRORS = {
       `The charger asked to slow down: commands paused for ${wait.en} ("Pause charging" stays available).`,
       `La borne a demandé de ralentir : commandes en pause pendant ${wait.fr} (« Mettre la charge en pause » reste disponible).`,
     ),
+  pausedServer: (wait) =>
+    both(
+      `The charger answered with a server error: commands paused for ${wait.en} ("Pause charging" stays available).`,
+      `La borne a répondu par une erreur serveur : commandes en pause pendant ${wait.fr} (« Mettre la charge en pause » reste disponible).`,
+    ),
+  notReadYet: both(
+    'The charger has not been read since the integration started: start and the current wait for a read ("Pause charging" stays available). Not sent.',
+    "La borne n'a pas encore été lue depuis le démarrage de l'intégration : le démarrage et le courant attendent une lecture (« Mettre la charge en pause » reste disponible). Non envoyée.",
+  ),
   noCredentials: both(
     'The charger refused the user name and password (new try later): not sent.',
     "La borne a refusé le nom d'utilisateur et le mot de passe (nouvel essai plus tard) : non envoyée.",
