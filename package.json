@@ -1,6 +1,6 @@
 {
   "name": "gladys-openevse",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Gladys Assistant external integration for OpenEVSE EV chargers (state, vehicle, current, voltage, power, pilot, session energy, energy index with a plausibility guard, temperature; optional start, pause and charging current), over their local HTTP API. Unofficial, not affiliated with OpenEVSE.",
   "type": "module",

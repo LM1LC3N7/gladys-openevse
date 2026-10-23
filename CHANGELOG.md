@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-23
+
 ## [0.1.1] - 2026-10-21
 
 ### Added
@@ -63,5 +65,6 @@ the notes of the version's GitHub Release.
 - During a 5xx pause, start and the current say "server error", not "slow
   down".
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-openevse/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/LM1LC3N7/gladys-openevse/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/LM1LC3N7/gladys-openevse/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/LM1LC3N7/gladys-openevse/releases/tag/v0.1.1
