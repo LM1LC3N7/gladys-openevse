@@ -8,6 +8,7 @@ import { INDEX_MAX_KW } from '../src/constants.js';
 import { IndexGuard } from '../src/guard.js';
 
 const HOUR = 3_600_000;
+const MINUTE = 60_000;
 const T0 = 1_000_000_000;
 
 test('0 never; the first value taken; a plausible rise taken', () => {
@@ -46,4 +47,29 @@ test('maxKw is a checked parameter; the guard keeps the approved rules', () => {
   const source = readFileSync(new URL('../src/guard.js', import.meta.url), 'utf8');
   assert.match(source, /The IndexGuard of gladys-p1-monitor/);
   assert.equal(INDEX_MAX_KW, 25);
+});
+
+test('index guard: an accepted drop is the floor, a lower value later is held', () => {
+  const guard = new IndexGuard({ value: 1000, at: 0 }, undefined, 0, 100);
+  assert.equal(guard.accept(12, MINUTE), false);
+  assert.ok(guard.acceptHeld());
+  assert.equal(guard.accept(5, 2 * MINUTE), false, 'never 5 kWh without a click');
+  assert.equal(guard.held.to, 5);
+  assert.equal(guard.last.value, 1000);
+  // The value accepted comes back: it follows, from the floor accepted.
+  assert.equal(guard.accept(12.1, 3 * MINUTE), true);
+  assert.equal(guard.held, undefined);
+});
+
+test('index guard: readings under an accepted floor for hours never widen the acceptance', () => {
+  const guard = new IndexGuard({ value: 1000, at: 0 }, undefined, 0, 100);
+  assert.equal(guard.accept(12, MINUTE), false);
+  assert.ok(guard.acceptHeld());
+  let t = 2 * MINUTE;
+  for (; t < 15 * 60 * MINUTE; t += MINUTE) assert.equal(guard.accept(5, t), false);
+  assert.equal(guard.accept(212, t), false, '212 kWh after 15 h under the floor: held');
+  assert.equal(guard.held.to, 212);
+  // A value above the acceptance dropped it: 12.1 needs a new acceptance.
+  assert.equal(guard.accept(12.1, t + MINUTE), false);
+  assert.equal(guard.held.direction, 'down');
 });
