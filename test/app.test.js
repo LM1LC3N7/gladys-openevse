@@ -806,6 +806,28 @@ test('the energy index: never 0, a jump held until accepted in two clicks', asyn
   assert.match(ack.data.message.fr, /rien à accepter/);
 });
 
+test('the energy index: a second click never takes a drop lower than the one listed', async (t) => {
+  const { gladys, advance, charger } = await setup(t);
+  await advance(30 * SECOND);
+  assert.equal(last(gladys, 'total-energy'), 1234.567);
+  charger.status = status({ total_energy: 12 });
+  await advance(30 * SECOND);
+  assert.equal(last(gladys, 'total-energy'), 1234.567, 'a drop is held');
+  let ack = await gladys.fake.action(ACTIONS.ACCEPT_HELD_INDEX);
+  assert.match(ack.data.message.fr, /Rien n'est encore accepté/);
+  charger.status = status({ total_energy: 5 });
+  await advance(30 * SECOND);
+  ack = await gladys.fake.action(ACTIONS.ACCEPT_HELD_INDEX);
+  assert.match(ack.data.message.fr, /Rien n'est encore accepté/, 'a first click again');
+  assert.match(ack.data.message.fr, /à 5 kWh/);
+  await advance(SECOND);
+  assert.equal(last(gladys, 'total-energy'), 1234.567, 'never 5 kWh without a click');
+  ack = await gladys.fake.action(ACTIONS.ACCEPT_HELD_INDEX);
+  assert.match(ack.data.message.fr, /Accepté/);
+  await advance(SECOND);
+  assert.equal(last(gladys, 'total-energy'), 5, 'the value listed, accepted');
+});
+
 test('the energy index: a drop held across a restart, a second click too late refused', async (t) => {
   const store = memoryStore();
   const { gladys, app, advance, charger } = await setup(t, { store });

@@ -714,7 +714,8 @@ export class OpenEvseApp {
   /** Whether the value held, at the second click, is still what the first one showed. */
   withinListed(guard, held, listed, now) {
     const top = listed.to + (guard.maxKw * Math.max(0, now - listed.at)) / HOUR + INDEX_SLACK_KWH;
-    return held.direction === 'up' ? held.to >= listed.to && held.to <= top : held.to <= top;
+    // Both ways a floor: a value lower than the one listed is a first click again.
+    return held.to >= listed.to && held.to <= top;
   }
 
   // --- Status ----------------------------------------------------------------
