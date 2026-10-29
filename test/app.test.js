@@ -828,6 +828,20 @@ test('the energy index: a second click never takes a drop lower than the one lis
   assert.equal(last(gladys, 'total-energy'), 5, 'the value listed, accepted');
 });
 
+test('the energy index: a jump grown past the margin between the clicks is listed again', async (t) => {
+  const { gladys, advance, charger } = await setup(t);
+  await advance(30 * SECOND);
+  charger.status = status({ total_energy: 9999 });
+  await advance(30 * SECOND);
+  await gladys.fake.action(ACTIONS.ACCEPT_HELD_INDEX);
+  charger.status = status({ total_energy: 19999 });
+  await advance(30 * SECOND);
+  const ack = await gladys.fake.action(ACTIONS.ACCEPT_HELD_INDEX);
+  await advance(SECOND);
+  assert.match(ack.data.message.fr, /Rien n'est encore accepté/);
+  assert.equal(last(gladys, 'total-energy'), 1234.567);
+});
+
 test('the energy index: a drop held across a restart, a second click too late refused', async (t) => {
   const store = memoryStore();
   const { gladys, app, advance, charger } = await setup(t, { store });

@@ -674,7 +674,7 @@ export class OpenEvseApp {
    * one within 2 minutes takes it, if the same hold is still there
    * (direction, from, threshold) and the value held now stays within what
    * was shown: for a jump, from the value shown up to it + the margin of the
-   * guard since; for a drop, at most it + that margin. Otherwise it is a
+   * guard since; for a drop, the same (never lower than it). Otherwise it is a
    * first click again. Then taken as shown (plus what the charger may draw
    * until its next read, src/guard.js), never anything else.
    */
